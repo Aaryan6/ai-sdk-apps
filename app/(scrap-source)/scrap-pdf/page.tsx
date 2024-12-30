@@ -1,7 +1,7 @@
 "use client";
 
 import { MasonryIcon, VercelIcon } from "@/components/icons";
-import { Message } from "@/components/message";
+import { Message } from "@/app/(scrap-source)/components/message";
 import { useScrollToBottom } from "@/components/use-scroll-to-bottom";
 import { useChat } from "ai/react";
 import { motion } from "framer-motion";
@@ -129,12 +129,7 @@ export default function Home() {
           )}
 
           {messages.map((message) => (
-            <Message
-              key={message.id}
-              role={message.role}
-              content={message.content}
-              toolInvocations={message.toolInvocations}
-            ></Message>
+            <Message message={message} key={message.id} sources={sourcesData} />
           ))}
           <div ref={messagesEndRef} />
         </div>

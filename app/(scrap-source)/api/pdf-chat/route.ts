@@ -1,8 +1,10 @@
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { generateObject, StreamData, streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+import { generateObject, createDataStreamResponse, streamText } from "ai";
 import { z } from "zod";
 import { Source } from "../../_type";
 import * as cheerio from "cheerio";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 
 const google = createGoogleGenerativeAI({
   apiKey: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
@@ -49,55 +51,57 @@ export async function POST(request: Request) {
     data,
   }: { messages: any; content: string; data: Source[] } = await request.json();
 
-  console.log({ content });
-
-  const streamData = new StreamData();
-
-  const result = await streamText({
-    model: google("gemini-1.5-flash-8b"),
-    messages: messages,
-    system: `You are a helpful assistant that analyzes news content. Use the following scraped content as your source of knowledge to answer questions: ${content}. 
+  return createDataStreamResponse({
+    execute: (dataStream) => {
+      const result = streamText({
+        model: google("gemini-1.5-flash-8b"),
+        messages: messages,
+        system: `You are a helpful assistant that analyzes news content. Use the following scraped content as your source of knowledge to answer questions: ${content}. 
     Only answer based on the information provided in the content. If the information isn't available in the content, say so.
     Be precise and factual in your responses.
-    Rule: You must use the getContentFromExtractedLinks tool to get relevant information from the links.`,
-    toolChoice: "auto",
-    maxSteps: 3,
-    experimental_toolCallStreaming: true,
-    tools: {
-      getContentFromExtractedLinks: {
-        description: "Get content from sources.",
-        parameters: z.object({
-          question: z.string({
-            description: "need a user query with context of the question",
-          }),
-        }),
-        execute: async ({ question }) => {
-          console.log({ question });
-          const result = await generateObject({
-            model: google("gemini-1.5-flash-8b"),
-            system: `You are a helpful assistant, choose the most relevant links from the given sources to answer the question: ${question}.`,
-            prompt: `Sources: ${JSON.stringify(data)}`,
-            schema: z.object({
-              links: z.array(z.string()),
+    Rule: You must use the getContentFromExtractedLinks tool to get relevant information from the sources.`,
+        toolChoice: "auto",
+        maxSteps: 3,
+        experimental_toolCallStreaming: true,
+        tools: {
+          getContentFromExtractedLinks: {
+            description: "Get content from sources.",
+            parameters: z.object({
+              question: z.string({
+                description: "need a user query with context of the question",
+              }),
             }),
-          });
+            execute: async ({ question }, { toolCallId }) => {
+              console.log({ question });
 
-          const links = result.object.links;
-          streamData.append({ links });
-          let content = "";
-          for (const link of links) {
-            const linkContent = await scrapeLinkContent(link);
-            content += `Source: ${link} ${linkContent}`;
-          }
-          console.log({ content });
-          return content;
+              const result = await generateObject({
+                model: google("gemini-1.5-flash-8b"),
+                system: `You are a helpful assistant, choose the most relevant links from the given sources to answer the question: ${question}.`,
+                prompt: `Sources: ${JSON.stringify(data)}`,
+                schema: z.object({
+                  links: z.array(z.string()),
+                }),
+              });
+
+              const links = result.object.links;
+              dataStream.writeMessageAnnotation({
+                toolCallId: toolCallId,
+                toolName: "getContentFromExtractedLinks",
+                links: links,
+                messageId: toolCallId,
+              });
+              let content = "";
+              for (const link of links) {
+                const linkContent = await scrapeLinkContent(link);
+                content += `Source: ${link} ${linkContent}`;
+              }
+              console.log({ content });
+              return content;
+            },
+          },
         },
-      },
-    },
-    onStepFinish(event) {
-      console.log({ event });
+      });
+      result.mergeIntoDataStream(dataStream);
     },
   });
-
-  return result.toDataStreamResponse({ data: streamData });
 }
